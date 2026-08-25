@@ -5,6 +5,7 @@ from typing import List, Dict, Any
 
 class BaseExporter(ABC):
     @abstractmethod
-    def export(self, records: List[Dict[str, Any]], destination: Path, metadata: Dict[str, Any] = None) -> None:
+    def export(self, records: List[Dict[str, Any]], destination: Path, metadata: Dict[str, Any] = None, mode: str = "both") -> None:
         """Export formatted dictionary records to target file destination."""
         pass
+

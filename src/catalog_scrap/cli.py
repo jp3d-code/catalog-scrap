@@ -6,10 +6,11 @@ from catalog_scrap.transformers import Plant3DTransformer
 from catalog_scrap.exporters import JSONExporter, CSVExporter
 
 
-def run_pipeline(pdf_path: Path, output_dir: Path, adapter_name: str = None, export_csv: bool = False) -> None:
+def run_pipeline(pdf_path: Path, output_dir: Path, adapter_name: str = None, export_csv: bool = False, mode: str = "both") -> None:
     print(f"==================================================")
     print(f"Catalog Scraping Pipeline (JSON Output)")
     print(f"Target PDF: {pdf_path}")
+    print(f"Export Mode: {mode}")
     print(f"==================================================")
 
     if not pdf_path.exists():
@@ -40,7 +41,7 @@ def run_pipeline(pdf_path: Path, output_dir: Path, adapter_name: str = None, exp
         "total_models": len(catalog_items),
         "total_records": len(plant3d_records),
         "models_summary": [item.model for item in catalog_items]
-    })
+    }, mode=mode)
 
     if export_csv:
         csv_path = output_dir / f"{stem_name}_plant3d.csv"
@@ -69,6 +70,13 @@ def main() -> None:
         help="Output directory (default: output/)"
     )
     parser.add_argument(
+        "--mode",
+        type=str,
+        choices=["split", "consolidated", "both"],
+        default="both",
+        help="Export mode: 'split' (manifest + model files), 'consolidated' (single master JSON), or 'both' (default)"
+    )
+    parser.add_argument(
         "--csv",
         action="store_true",
         help="Also export legacy CSV files (disabled by default)"
@@ -78,7 +86,8 @@ def main() -> None:
     pdf_path = Path(args.pdf)
     output_dir = Path(args.output_dir)
 
-    run_pipeline(pdf_path, output_dir, args.adapter, export_csv=args.csv)
+    run_pipeline(pdf_path, output_dir, args.adapter, export_csv=args.csv, mode=args.mode)
+
 
 
 if __name__ == "__main__":

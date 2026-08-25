@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import List
 from catalog_scrap.core.base_parser import BaseParser
 from catalog_scrap.core.models import CatalogItem, DimensionEntry
@@ -5,7 +6,17 @@ from catalog_scrap.parsers.utils import parse_nps_cell
 
 
 class KlingerK200Parser(BaseParser):
+    @classmethod
+    def can_handle(cls, pdf_path: Path, text_sample: str = "") -> bool:
+        filename = pdf_path.name.upper()
+        if any(k in filename for k in ["KLINGER", "INTEC", "K200"]):
+            return True
+        if "KLINGER" in text_sample.upper() or "INTEC K200" in text_sample.upper():
+            return True
+        return False
+
     def parse(self, pdf_handle) -> List[CatalogItem]:
+
         """Parse tables from KLINGER INTEC K200 PDF page into a list containing 1 CatalogItem entity."""
         page = pdf_handle.pages[0]
         tables = page.extract_tables()

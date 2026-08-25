@@ -1,12 +1,24 @@
 import re
+from pathlib import Path
 from typing import List, Dict, Any, Optional
+
 from catalog_scrap.core.base_parser import BaseParser
 from catalog_scrap.core.models import CatalogItem, DimensionEntry
 from catalog_scrap.parsers.utils import parse_nps_cell
 
 
 class SaidiRK2016Parser(BaseParser):
+    @classmethod
+    def can_handle(cls, pdf_path: Path, text_sample: str = "") -> bool:
+        filename = pdf_path.name.upper()
+        if any(k in filename for k in ["SAIDI", "CATALOGO_VAL_BOLA", "2016"]):
+            return True
+        if "SAIDI" in text_sample.upper() or "RK VALVULAS" in text_sample.upper() or "RK VÁLVULAS" in text_sample.upper():
+            return True
+        return False
+
     def parse(self, pdf_handle) -> List[CatalogItem]:
+
         """Parse all pages from Saidi RK 2016 Ball Valves PDF Catalog into a list of CatalogItem entities."""
         items: List[CatalogItem] = []
 

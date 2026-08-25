@@ -19,19 +19,16 @@ class CatalogParserFactory:
             print(f"[CatalogParserFactory] Using explicitly specified adapter: {adapter_name}")
             return parser_cls()
 
-        # Auto-detect parser based on file name or content
-        filename = pdf_path.name.upper()
-        if "SAIDI" in filename or "CATALOGO_VAL_BOLA" in filename or "2016" in filename:
-            print(f"[CatalogParserFactory] Auto-detected adapter: saidi_rk2016 for {pdf_path.name}")
-            return SaidiRK2016Parser()
-
-        if "INTEC" in filename or "K200" in filename or "KLINGER" in filename:
-            print(f"[CatalogParserFactory] Auto-detected adapter: klinger_k200 for {pdf_path.name}")
-            return KlingerK200Parser()
+        # Auto-detect parser by querying registered parser classes via can_handle()
+        for name, parser_cls in cls._REGISTRY.items():
+            if parser_cls.can_handle(pdf_path):
+                print(f"[CatalogParserFactory] Auto-detected adapter: '{name}' for {pdf_path.name}")
+                return parser_cls()
 
         # Default fallback
-        print(f"[CatalogParserFactory] Fallback to default adapter: klinger_k200")
+        print(f"[CatalogParserFactory] Fallback to default adapter: 'klinger_k200'")
         return KlingerK200Parser()
+
 
     @classmethod
     def register_parser(cls, name: str, parser_cls: Type[BaseParser]) -> None:
