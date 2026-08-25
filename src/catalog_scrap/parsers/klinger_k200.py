@@ -1,18 +1,19 @@
+from typing import List
 from catalog_scrap.core.base_parser import BaseParser
 from catalog_scrap.core.models import CatalogItem, DimensionEntry
 from catalog_scrap.parsers.utils import parse_nps_cell
 
 
 class KlingerK200Parser(BaseParser):
-    def parse(self, pdf_handle) -> CatalogItem:
-        """Parse tables from KLINGER INTEC K200 PDF page into a CatalogItem entity."""
+    def parse(self, pdf_handle) -> List[CatalogItem]:
+        """Parse tables from KLINGER INTEC K200 PDF page into a list containing 1 CatalogItem entity."""
         page = pdf_handle.pages[0]
         tables = page.extract_tables()
 
         materials = self._extract_materials(tables)
         dimensions = self._extract_dimensions(tables)
 
-        return CatalogItem(
+        item = CatalogItem(
             manufacturer="KLINGER Schöneberg",
             model="INTEC K200",
             valve_type="Flanged Ball Valve Full Bore",
@@ -26,6 +27,7 @@ class KlingerK200Parser(BaseParser):
                 }
             }
         )
+        return [item]
 
     def _extract_materials(self, tables) -> dict:
         materials = {}
