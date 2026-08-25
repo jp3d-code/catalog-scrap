@@ -18,6 +18,17 @@ class Plant3DTransformer:
 
         return all_records
 
+    def _resolve_geometry_template(self, model: str, valve_type: str) -> str:
+        m = model.upper()
+        vt = valve_type.upper()
+        if "HANDWHEEL" in vt or "VOLANTE" in vt:
+            return "BALL_VALVE_HANDWHEEL"
+        if "3 PIEZAS" in vt or "3PC" in vt or "2013S" in m or "2011S" in m:
+            return "BALL_VALVE_3PC_THREADED"
+        if "NPT" in m or "800LBS" in vt or "1 PIEZA" in vt:
+            return "BALL_VALVE_1PC_COMPACT"
+        return "BALL_VALVE_2PC_FLANGED"
+
     def _transform_single_item(self, item: CatalogItem) -> List[Dict[str, Any]]:
         records = []
         materials = item.materials
@@ -28,6 +39,7 @@ class Plant3DTransformer:
 
         face_to_face_std = item.metadata.get('standards', {}).get('face_to_face', 'ANSI B 16.10 / DIN')
         flange_std = item.metadata.get('standards', {}).get('flanges', 'ANSI B 16.5 / DIN')
+        geom_template = self._resolve_geometry_template(item.model, item.valve_type)
 
         for dim in item.dimensions:
             nps = dim.nps
@@ -42,6 +54,8 @@ class Plant3DTransformer:
                     "Manufacturer": item.manufacturer,
                     "Model": item.model,
                     "Valve_Type": item.valve_type,
+                    "Geometry_Template": geom_template,
+                    "Operator_Type": "LEVER",
                     "NPS_inch": nps,
                     "DN_mm": dim.dn,
                     "Class_lbs": 150,
@@ -67,6 +81,8 @@ class Plant3DTransformer:
                     "Manufacturer": item.manufacturer,
                     "Model": item.model,
                     "Valve_Type": item.valve_type,
+                    "Geometry_Template": geom_template,
+                    "Operator_Type": "LEVER",
                     "NPS_inch": nps,
                     "DN_mm": dim.dn,
                     "Class_lbs": 300,
@@ -92,6 +108,8 @@ class Plant3DTransformer:
                     "Manufacturer": item.manufacturer,
                     "Model": item.model,
                     "Valve_Type": item.valve_type,
+                    "Geometry_Template": geom_template,
+                    "Operator_Type": "LEVER",
                     "NPS_inch": nps,
                     "DN_mm": dim.dn,
                     "Class_lbs": default_class,
@@ -113,4 +131,5 @@ class Plant3DTransformer:
                 records.append(rec)
 
         return records
+
 

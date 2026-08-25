@@ -49,10 +49,15 @@ class JSONExporter(BaseExporter):
                 model_filename = f"{model_name}.json"
                 model_json_path = catalog_dir / model_filename
 
+                geom_template = first_rec.get("Geometry_Template", "BALL_VALVE_2PC_FLANGED")
+                op_type = first_rec.get("Operator_Type", "LEVER")
+
                 models_index.append({
                     "model": model_name,
                     "manufacturer": first_rec.get("Manufacturer", ""),
                     "valve_type": first_rec.get("Valve_Type", ""),
+                    "geometry_template": geom_template,
+                    "operator_type": op_type,
                     "records_count": len(model_records),
                     "file": model_filename
                 })
@@ -62,6 +67,8 @@ class JSONExporter(BaseExporter):
                     "model": model_name,
                     "manufacturer": first_rec.get("Manufacturer", ""),
                     "valve_type": first_rec.get("Valve_Type", ""),
+                    "geometry_template": geom_template,
+                    "operator_type": op_type,
                     "records_count": len(model_records),
                     "standards": {
                         "face_to_face": first_rec.get("Standard_Face_To_Face", ""),
@@ -71,6 +78,7 @@ class JSONExporter(BaseExporter):
                 }
                 with open(model_json_path, mode="w", encoding="utf-8") as f:
                     json.dump(model_payload, f, indent=2, ensure_ascii=False)
+
 
             # Generate manifest.json for catalog index
             manifest_payload = {
