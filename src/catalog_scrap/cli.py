@@ -1,178 +1,227 @@
 import argparse
+import sys
 from pathlib import Path
+from typing import Optional
+
 from catalog_scrap.core import CatalogParserFactory
 from catalog_scrap.loaders import PdfLoader
-from catalog_scrap.transformers import Plant3DTransformer
-from catalog_scrap.exporters import JSONExporter, CSVExporter
+from catalog_scrap.transformers import DatasheetPlant3DTransformer, CatalogPlant3DTransformer
+from catalog_scrap.exporters import DatasheetJSONExporter, CatalogJSONExporter, CSVExporter
 
 
-def run_pipeline(
-    pdf_path: Path,
-    output_dir: Path,
-    adapter_name: str = None,
-    export_csv: bool = False,
-    mode: str = "both",
-    extraction_type: str = "auto"
-) -> None:
+def resolve_pdf_path(pdf_str: str) -> Optional[Path]:
+    """Resolve PDF path supporting direct paths or fallbacks into docs folders."""
+    p = Path(pdf_str)
+    if p.exists():
+        return p
+
+    candidates = [
+        Path("docs/specifications") / p.name,
+        Path("docs/catalogs") / p.name,
+        Path("docs") / p.name
+    ]
+    for cand in candidates:
+        if cand.exists():
+            return cand
+
+    return None
+
+
+def run_spec_pipeline(pdf_path: Path, output_dir: Path, adapter_name: Optional[str] = None) -> None:
+    """
+    Datasheet Engine (Specific Piece Mode).
+    Extracts 100% of engineering parameters, BOM and standards, producing
+    EXACTLY ONE SELF-CONTAINED JSON FILE in output_dir.
+    """
+    resolved_pdf = resolve_pdf_path(str(pdf_path))
+    if not resolved_pdf:
+        print(f"[Error] Datasheet PDF file not found: {pdf_path}")
+        return
+
     print(f"==================================================")
-    print(f"Catalog Scraping Pipeline")
-    print(f"Target PDF: {pdf_path}")
-    print(f"Requested Extraction Type: {extraction_type}")
-    print(f"Export Mode: {mode}")
+    print(f"Datasheet Engine (Specific Component Mode)")
+    print(f"Target PDF: {resolved_pdf}")
     print(f"==================================================")
-
-    # Resolve default path variations if needed
-    if not pdf_path.exists():
-        fallback_candidates = [
-            Path("docs/catalogs") / pdf_path.name,
-            Path("docs/specifications") / pdf_path.name,
-            Path("docs") / pdf_path.name
-        ]
-        found = False
-        for cand in fallback_candidates:
-            if cand.exists():
-                pdf_path = cand
-                found = True
-                print(f"[Pipeline] Found PDF at resolved path: {pdf_path}")
-                break
-        if not found:
-            print(f"[Error] Specified PDF file does not exist: {pdf_path}")
-            return
 
     # 1. Ingest PDF
     loader = PdfLoader()
-    with loader.load(pdf_path) as pdf_handle:
-        # 2. Get Parser from Factory and Parse PDF
-        parser = CatalogParserFactory.get_parser(pdf_path, adapter_name)
-        catalog_items = parser.parse(pdf_handle)
+    with loader.load(resolved_pdf) as pdf_handle:
+        parser = CatalogParserFactory.get_parser(resolved_pdf, adapter_name)
+        items = parser.parse(pdf_handle)
 
-    if not catalog_items:
-        print("[Pipeline] No catalog entities were extracted.")
+    if not items:
+        print(f"[Datasheet Engine] No components parsed from: {resolved_pdf}")
         return
 
-    # Resolve extraction type
-    if extraction_type == "auto":
-        parts = [p.lower() for p in pdf_path.parts]
-        if "specifications" in parts or any(k in pdf_path.name.upper() for k in ["INTEC", "K200", "SPEC"]):
-            effective_type = "specific"
-        elif "catalogs" in parts or any(k in pdf_path.name.upper() for k in ["CATALOGO", "CATALOG"]):
-            effective_type = "generic"
-        else:
-            effective_type = getattr(catalog_items[0], "extraction_type", "generic")
-    else:
-        effective_type = extraction_type
+    item = items[0]
+    clean_model_name = item.model.replace(' ', '_').replace('/', '_')
 
-    for it in catalog_items:
-        it.extraction_type = effective_type
+    # 2. Transform to Plant 3D detailed records
+    transformer = DatasheetPlant3DTransformer()
+    plant3d_records = transformer.transform(item)
+    print(f"[Datasheet Engine] Generated {len(plant3d_records)} detailed Plant 3D component records.")
 
-    is_specific = (effective_type == "specific")
-    print(f"[Pipeline] Successfully parsed {len(catalog_items)} catalog entities (Mode: {'SPECIFIC (Detailed)' if is_specific else 'GENERIC (L & D Only)'}).")
+    # 3. Export SINGLE canonical specification JSON file
+    out_dir = output_dir if output_dir != Path("output") else Path("output/specifications")
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    # 3. Transform Entities to Plant 3D Records
-    transformer = Plant3DTransformer()
-    plant3d_records = transformer.transform(catalog_items)
-    print(f"[Pipeline] Generated {len(plant3d_records)} Plant 3D component records.")
+    dest_file = out_dir / f"{clean_model_name}.json"
+    exporter = DatasheetJSONExporter()
+    exporter.export(item, plant3d_records, dest_file)
 
-    # 4. Route Output Directory
-    if output_dir == Path("output"):
-        effective_output_dir = output_dir / ("specifications" if is_specific else "catalogs")
-    else:
-        effective_output_dir = output_dir
-    effective_output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"[OK] Successfully generated single specification file: {dest_file}")
 
-    json_exporter = JSONExporter()
-    stem_name = pdf_path.stem.replace(' ', '_')
 
-    # 5. Export Records
-    if is_specific:
-        # Detailed Component Mode: Export exhaustive JSON for each model
-        for item in catalog_items:
-            item_records = [r for r in plant3d_records if r.get("Model") == item.model]
-            if not item_records:
-                item_records = plant3d_records
-            spec_json_path = effective_output_dir / f"{item.model.replace(' ', '_')}.json"
-            json_exporter.export_specification(item, item_records, spec_json_path)
+def run_catalog_pipeline(
+    pdf_path: Path,
+    output_dir: Path,
+    adapter_name: Optional[str] = None,
+    mode: str = "both",
+    export_csv: bool = False
+) -> None:
+    """
+    Catalog Engine (Generic Commercial Catalog Mode).
+    Extracts multi-family catalog components strictly focusing on L & D,
+    producing catalog manifest.json and clean per-model JSON files.
+    """
+    resolved_pdf = resolve_pdf_path(str(pdf_path))
+    if not resolved_pdf:
+        print(f"[Error] Catalog PDF file not found: {pdf_path}")
+        return
 
-        # Also export catalog format if split or consolidated requested
-        if mode in ("consolidated", "both", "split"):
-            catalog_json_path = effective_output_dir / f"{stem_name}_plant3d.json"
-            json_exporter.export(plant3d_records, catalog_json_path, metadata={
-                "source_catalog": pdf_path.name,
-                "extraction_type": "specific",
-                "total_models": len(catalog_items),
-                "total_records": len(plant3d_records),
-                "models_summary": [it.model for it in catalog_items]
-            }, mode=mode)
-    else:
-        # Generic Catalog Mode: Standardized L & D catalog export
-        json_path = effective_output_dir / f"{stem_name}_plant3d.json"
-        json_exporter.export(plant3d_records, json_path, metadata={
-            "source_catalog": pdf_path.name,
-            "extraction_type": "generic",
-            "total_models": len(catalog_items),
-            "total_records": len(plant3d_records),
-            "models_summary": [it.model for it in catalog_items]
-        }, mode=mode)
+    print(f"==================================================")
+    print(f"Catalog Engine (Generic Commercial Catalog Mode)")
+    print(f"Target PDF: {resolved_pdf}")
+    print(f"Export Mode: {mode}")
+    print(f"==================================================")
+
+    # 1. Ingest PDF
+    loader = PdfLoader()
+    with loader.load(resolved_pdf) as pdf_handle:
+        parser = CatalogParserFactory.get_parser(resolved_pdf, adapter_name)
+        items = parser.parse(pdf_handle)
+
+    if not items:
+        print(f"[Catalog Engine] No catalog items parsed from: {resolved_pdf}")
+        return
+
+    # 2. Transform to lean Plant 3D records (L & D only)
+    transformer = CatalogPlant3DTransformer()
+    all_records = []
+    for it in items:
+        all_records.extend(transformer.transform(it))
+
+    print(f"[Catalog Engine] Extracted {len(items)} models, generated {len(all_records)} lean catalog records.")
+
+    # 3. Export catalog manifest & model files
+    out_dir = output_dir if output_dir != Path("output") else Path("output/catalogs")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    stem_name = resolved_pdf.stem.replace(' ', '_')
+    json_path = out_dir / f"{stem_name}_plant3d.json"
+
+    exporter = CatalogJSONExporter()
+    exporter.export(all_records, json_path, metadata={
+        "source_catalog": resolved_pdf.name,
+        "extraction_type": "generic",
+        "total_models": len(items),
+        "total_records": len(all_records),
+        "models_summary": [it.model for it in items]
+    }, mode=mode)
 
     if export_csv:
-        csv_path = effective_output_dir / f"{stem_name}_plant3d.csv"
+        csv_path = out_dir / f"{stem_name}_plant3d.csv"
         csv_exporter = CSVExporter()
-        csv_exporter.export(plant3d_records, csv_path)
+        csv_exporter.export(all_records, csv_path)
+
+    print(f"[OK] Successfully generated catalog structure under: {out_dir / stem_name}")
+
+
+def run_all_pipelines(base_dir: Path = Path("docs"), output_dir: Path = Path("output")) -> None:
+    """Batch runner: processes all PDFs in docs/specifications and docs/catalogs."""
+    print("==================================================")
+    print("Running All Extraction Pipelines (Batch Mode)")
+    print("==================================================")
+
+    specs_dir = base_dir / "specifications"
+    if specs_dir.exists():
+        for pdf in sorted(specs_dir.glob("*.pdf")):
+            run_spec_pipeline(pdf, output_dir / "specifications")
+
+    catalogs_dir = base_dir / "catalogs"
+    if catalogs_dir.exists():
+        for pdf in sorted(catalogs_dir.glob("*.pdf")):
+            run_catalog_pipeline(pdf, output_dir / "catalogs")
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Catalog Scrap Pipeline for AutoCAD Plant 3D")
-    parser.add_argument(
-        "--pdf",
-        type=str,
-        default="docs/catalogs/CATALOGO_VAL_BOLA_2016-44.pdf",
-        help="Path to PDF catalog or specification file"
+    parser = argparse.ArgumentParser(
+        description="Catalog Scrap Pipeline for AutoCAD Plant 3D (Dual-Engine)",
+        formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument(
-        "--adapter",
-        type=str,
-        default=None,
-        help="Adapter name: klinger_k200, saidi_rk2016, or leave blank for auto-detection"
-    )
-    parser.add_argument(
-        "--output-dir",
-        type=str,
-        default="output",
-        help="Output directory (default: output/)"
-    )
-    parser.add_argument(
-        "--type",
-        dest="extraction_type",
-        type=str,
-        choices=["auto", "specific", "generic"],
-        default="auto",
-        help="Extraction type: 'specific' (full detailed part datasheet), 'generic' (standardized L & D catalog), or 'auto' (default)"
-    )
-    parser.add_argument(
-        "--mode",
-        type=str,
-        choices=["split", "consolidated", "both"],
-        default="both",
-        help="Export mode: 'split' (manifest + model files), 'consolidated' (single master JSON), or 'both' (default)"
-    )
-    parser.add_argument(
-        "--csv",
-        action="store_true",
-        help="Also export legacy CSV files (disabled by default)"
-    )
+
+    subparsers = parser.add_subparsers(dest="subcommand", help="Extraction subcommands")
+
+    # Subcommand: spec
+    spec_p = subparsers.add_parser("spec", help="Extract single component datasheet into a SINGLE JSON file")
+    spec_p.add_argument("pdf", type=str, help="Path to datasheet PDF file")
+    spec_p.add_argument("--adapter", type=str, default=None, help="Parser adapter name (optional)")
+    spec_p.add_argument("--output-dir", type=str, default="output/specifications", help="Output directory")
+
+    # Subcommand: catalog
+    cat_p = subparsers.add_parser("catalog", help="Extract commercial multi-family catalog into manifest and model files")
+    cat_p.add_argument("pdf", type=str, help="Path to catalog PDF file")
+    cat_p.add_argument("--adapter", type=str, default=None, help="Parser adapter name (optional)")
+    cat_p.add_argument("--output-dir", type=str, default="output/catalogs", help="Output directory")
+    cat_p.add_argument("--mode", type=str, choices=["split", "consolidated", "both"], default="both", help="Export mode")
+    cat_p.add_argument("--csv", action="store_true", help="Also export legacy CSV")
+
+    # Subcommand: run-all
+    subparsers.add_parser("run-all", help="Process all PDFs in docs/specifications and docs/catalogs")
+
+    # Backward compatibility flags at root level
+    parser.add_argument("--pdf", type=str, default=None, help="Legacy path to PDF file")
+    parser.add_argument("--adapter", type=str, default=None, help="Legacy adapter name")
+    parser.add_argument("--output-dir", type=str, default="output", help="Legacy output directory")
+    parser.add_argument("--type", type=str, choices=["auto", "specific", "generic"], default="auto", help="Legacy extraction type")
+    parser.add_argument("--mode", type=str, choices=["split", "consolidated", "both"], default="both", help="Legacy export mode")
+    parser.add_argument("--csv", action="store_true", help="Legacy CSV export")
 
     args = parser.parse_args()
-    pdf_path = Path(args.pdf)
-    output_dir = Path(args.output_dir)
 
-    run_pipeline(
-        pdf_path=pdf_path,
-        output_dir=output_dir,
-        adapter_name=args.adapter,
-        export_csv=args.csv,
-        mode=args.mode,
-        extraction_type=args.extraction_type
+    # Route based on subcommand
+    if args.subcommand == "spec":
+        run_spec_pipeline(Path(args.pdf), Path(args.output_dir), args.adapter)
+        return
+    elif args.subcommand == "catalog":
+        run_catalog_pipeline(Path(args.pdf), Path(args.output_dir), args.adapter, mode=args.mode, export_csv=args.csv)
+        return
+    elif args.subcommand == "run-all":
+        run_all_pipelines(output_dir=Path(args.output_dir))
+        return
+
+    # Fallback to legacy flag handling
+    pdf_target = args.pdf or "docs/specifications/INTEC-K200-NPS1-24inch-eng.pdf"
+    resolved = resolve_pdf_path(pdf_target)
+    if not resolved:
+        resolved = resolve_pdf_path("docs/catalogs/CATALOGO_VAL_BOLA_2016-44.pdf")
+
+    if not resolved:
+        print(f"[Error] Could not resolve target PDF file: {pdf_target}")
+        return
+
+    parts = [p.lower() for p in resolved.parts]
+    is_spec = (
+        args.type == "specific" or
+        (args.type == "auto" and ("specifications" in parts or any(k in resolved.name.upper() for k in ["INTEC", "K200", "SPEC"])))
     )
+
+    if is_spec:
+        out_d = Path(args.output_dir) if args.output_dir != "output" else Path("output/specifications")
+        run_spec_pipeline(resolved, out_d, args.adapter)
+    else:
+        out_d = Path(args.output_dir) if args.output_dir != "output" else Path("output/catalogs")
+        run_catalog_pipeline(resolved, out_d, args.adapter, mode=args.mode, export_csv=args.csv)
 
 
 if __name__ == "__main__":
