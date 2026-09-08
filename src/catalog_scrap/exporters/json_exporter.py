@@ -79,7 +79,6 @@ class JSONExporter(BaseExporter):
                 with open(model_json_path, mode="w", encoding="utf-8") as f:
                     json.dump(model_payload, f, indent=2, ensure_ascii=False)
 
-
             # Generate manifest.json for catalog index
             manifest_payload = {
                 "source_catalog": meta.get("source_catalog", destination.name),
@@ -92,4 +91,33 @@ class JSONExporter(BaseExporter):
             with open(manifest_path, mode="w", encoding="utf-8") as f:
                 json.dump(manifest_payload, f, indent=2, ensure_ascii=False)
             print(f"[JSONExporter] Successfully exported Catalog Manifest ({manifest_path}) and {len(grouped_by_model)} clean model JSON files.")
+
+    def export_specification(self, catalog_item: Any, plant3d_records: List[Dict[str, Any]], destination: Path) -> None:
+        """
+        Export complete engineering datasheet / specific component extraction.
+        Contains the exact full table with all technical parameters (H, L1, L, D, E, ISO, Torque, Weight),
+        BOM parts list, standards, and transformed Plant 3D records.
+        """
+        destination.parent.mkdir(parents=True, exist_ok=True)
+
+        dimensions_data = [d.to_dict() for d in catalog_item.dimensions]
+
+        payload = {
+            "model": catalog_item.model,
+            "manufacturer": catalog_item.manufacturer,
+            "valve_type": catalog_item.valve_type,
+            "extraction_type": "specific",
+            "metadata": catalog_item.metadata,
+            "standards": catalog_item.metadata.get("standards", {}),
+            "materials": catalog_item.materials,
+            "parts_list": catalog_item.parts_list,
+            "dimensions_count": len(dimensions_data),
+            "dimensions_table": dimensions_data,
+            "plant3d_records_count": len(plant3d_records),
+            "plant3d_records": plant3d_records
+        }
+
+        with open(destination, mode="w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, ensure_ascii=False)
+        print(f"[JSONExporter] Successfully exported Detailed Component Specification: {destination}")
 

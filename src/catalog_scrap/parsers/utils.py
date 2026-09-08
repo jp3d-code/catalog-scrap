@@ -72,12 +72,14 @@ def parse_nps_cell(raw_cell_str: str) -> dict:
             except ValueError:
                 pass
 
-    dn_mm = int(round(decimal_in * 25.4))
-    # Snap to nearest standard DN
-    for standard_dn in sorted(DN_TO_NPS.keys()):
-        if abs(dn_mm - standard_dn) <= 3:
-            dn_mm = standard_dn
-            break
+    dn_mm = NPS_TO_DN.get(normalized)
+    if dn_mm is None:
+        dn_mm = int(round(decimal_in * 25.4))
+        # Snap to nearest standard DN
+        for standard_dn in sorted(DN_TO_NPS.keys()):
+            if abs(dn_mm - standard_dn) <= 4:
+                dn_mm = standard_dn
+                break
 
     return {
         "nps": normalized,
