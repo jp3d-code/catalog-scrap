@@ -1,9 +1,25 @@
 from dataclasses import dataclass, field
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Union
+
+
+@dataclass
+class BOMItem:
+    """Bill of Materials entry for technical part datasheets."""
+    item_no: str
+    part: str
+    material: str
+
+    def to_dict(self) -> Dict[str, str]:
+        return {
+            "item_no": self.item_no,
+            "part": self.part,
+            "material": self.material
+        }
 
 
 @dataclass
 class DimensionEntry:
+    """Detailed dimension row for engineering datasheets and models."""
     nps: str
     dn: int
     dec_in: float
@@ -45,8 +61,36 @@ class DimensionEntry:
         return data
 
 
+# Alias for explicit datasheet domain semantics
+DatasheetRow = DimensionEntry
+
+
+@dataclass
+class CatalogSizeRow:
+    """Minimal dimension row for generic commercial catalogs (strictly L & D)."""
+    nps: str
+    dn: int
+    class_lbs: Union[str, int]
+    l_mm: float
+    d_mm: float
+    end_type: str = "FL"
+    body_material: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "nps": self.nps,
+            "dn": self.dn,
+            "class_lbs": self.class_lbs,
+            "l_mm": self.l_mm,
+            "d_mm": self.d_mm,
+            "end_type": self.end_type,
+            "body_material": self.body_material
+        }
+
+
 @dataclass
 class CatalogItem:
+    """Generic catalog entity or single component container."""
     manufacturer: str
     model: str
     valve_type: str
@@ -54,4 +98,40 @@ class CatalogItem:
     dimensions: List[DimensionEntry] = field(default_factory=list)
     materials: Dict[str, str] = field(default_factory=dict)
     parts_list: List[Dict[str, Any]] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ComponentDatasheet(CatalogItem):
+    """
+    Component Datasheet Domain Entity (Specific Piece Mode).
+    Represents an exhaustive engineering datasheet for a single valve or fitting model.
+    """
+    extraction_type: str = "specific"
+    standards: Dict[str, str] = field(default_factory=dict)
+    design_features: List[str] = field(default_factory=list)
+    parts_bom: List[BOMItem] = field(default_factory=list)
+
+    def __post_init__(self):
+        self.extraction_type = "specific"
+        if not self.standards and "standards" in self.metadata:
+            self.standards = self.metadata["standards"]
+        if not self.design_features and "design_features" in self.metadata:
+            self.design_features = self.metadata["design_features"]
+        if not self.parts_bom and self.parts_list:
+            self.parts_bom = [
+                BOMItem(item_no=str(p.get("item_no", "")), part=p.get("part", ""), material=p.get("material", ""))
+                for p in self.parts_list
+            ]
+
+
+@dataclass
+class CommercialCatalog:
+    """
+    Commercial Catalog Domain Entity (Generic Catalog Mode).
+    Represents a multi-family catalog containing multiple models.
+    """
+    source_catalog: str
+    extraction_type: str = "generic"
+    families: List[CatalogItem] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)

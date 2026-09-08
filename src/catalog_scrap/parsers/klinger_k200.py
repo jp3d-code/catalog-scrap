@@ -4,7 +4,7 @@ from typing import List, Dict, Any
 import pymupdf
 
 from catalog_scrap.core.base_parser import BaseParser
-from catalog_scrap.core.models import CatalogItem, DimensionEntry
+from catalog_scrap.core.models import CatalogItem, DimensionEntry, ComponentDatasheet, BOMItem
 from catalog_scrap.parsers.utils import parse_nps_cell
 
 
@@ -47,7 +47,7 @@ class KlingerK200Parser(BaseParser):
         dimensions = self._extract_dimensions(lines)
         materials, parts_list = self._extract_materials_and_parts(lines)
 
-        item = CatalogItem(
+        item = ComponentDatasheet(
             manufacturer="KLINGER Schöneberg",
             model="INTEC K200",
             valve_type="Flanged Ball Valve Full Bore",
@@ -55,6 +55,27 @@ class KlingerK200Parser(BaseParser):
             dimensions=dimensions,
             materials=materials,
             parts_list=parts_list,
+            parts_bom=[
+                BOMItem(item_no=str(p["item_no"]), part=p["part"], material=p["material"])
+                for p in parts_list
+            ],
+            standards={
+                "face_to_face": "ANSI B 16.10",
+                "flanges": "ANSI B 16.5",
+                "top_flange": "DIN EN ISO 5211",
+                "fire_safe": "API 607 / DIN EN ISO 10497",
+                "clean_air": "VDI 2440 (TA-Luft)"
+            },
+            design_features=[
+                "Two-piece ball valve",
+                "Full bore",
+                "Floating ball, soft seated",
+                "Blow-out proof stem",
+                "Antistatic device",
+                "Free of non-ferrous metals",
+                "Top flange DIN EN ISO 5211",
+                "Fire-Safe design acc. to API 607"
+            ],
             metadata={
                 "parser": "KlingerK200Parser",
                 "extraction_mode": "specific_component",
@@ -66,17 +87,7 @@ class KlingerK200Parser(BaseParser):
                     "top_flange": "DIN EN ISO 5211",
                     "fire_safe": "API 607 / DIN EN ISO 10497",
                     "clean_air": "VDI 2440 (TA-Luft)"
-                },
-                "design_features": [
-                    "Two-piece ball valve",
-                    "Full bore",
-                    "Floating ball, soft seated",
-                    "Blow-out proof stem",
-                    "Antistatic device",
-                    "Free of non-ferrous metals",
-                    "Top flange DIN EN ISO 5211",
-                    "Fire-Safe design acc. to API 607"
-                ]
+                }
             }
         )
         return [item]
