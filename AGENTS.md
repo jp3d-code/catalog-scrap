@@ -34,3 +34,11 @@ Repositorio de extracción, parseo y normalización de catálogos y hojas técni
 uv run python -m unittest discover -s tests -v
 uv run python -m catalog_scrap.cli run-all
 ```
+
+---
+
+## 📐 Convenciones Git
+
+- **PROHIBIDO HACER COMMITS SIN AUTORIZACIÓN**: NUNCA ejecutar `git commit` por iniciativa propia ni como paso automático. Solo realizar commits si el usuario da una instrucción o permiso explícito e inmediato ("haz commit", "commitea esto").
+- **Estilo de Commits**: En caso de estar autorizado por el usuario, usar commits atómicos tipo Conventional Commits (`<type>(<scope>): <subject>`) **con cero cuerpo/descripción**.
+
