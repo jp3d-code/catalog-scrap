@@ -39,7 +39,7 @@ class SaidiRK2016Parser(BaseParser):
 
             tables = page.extract_tables()
             materials = self._extract_materials(tables)
-            dimensions = self._extract_dimensions(tables)
+            dimensions = self._extract_dimensions(tables, fig_model=fig_model, valve_type=valve_type)
 
             if dimensions:
                 catalog_item = CatalogItem(
@@ -130,7 +130,7 @@ class SaidiRK2016Parser(BaseParser):
                         materials[clean_row[1]] = clean_row[2]
         return materials
 
-    def _extract_dimensions(self, tables: List[List[List[str]]]) -> List[DimensionEntry]:
+    def _extract_dimensions(self, tables: List[List[List[str]]], fig_model: str = "", valve_type: str = "") -> List[DimensionEntry]:
         dimensions = []
 
         for table in tables:
@@ -187,11 +187,13 @@ class SaidiRK2016Parser(BaseParser):
                     if match:
                         raw_nps = match.group(1)
 
-                if not raw_nps or "97/23" in raw_nps:
+                if not raw_nps or any(k in raw_nps for k in ["97/23", "0035", "0039", "CE", "PED"]):
                     continue
 
                 nps_info = parse_nps_cell(raw_nps)
                 dn_mm = nps_info['dn']
+                if not nps_info['nps'] or dn_mm <= 0 or nps_info['dec_in'] <= 0.0 or nps_info['dec_in'] > 24.0:
+                    continue
 
                 l_val, d_val, h_val, l1_val, weight_val = 0.0, 0.0, 0.0, 0.0, 0.0
                 iso_flange = ""
@@ -243,8 +245,13 @@ class SaidiRK2016Parser(BaseParser):
                 if "iso" in col_map and col_map["iso"] < len(clean_row_no_codes):
                     iso_flange = clean_row_no_codes[col_map["iso"]].upper()
 
-                # Strict validation: Only accept entries where genuine dimensions were parsed from PDF table
-                if d_val <= 0.0 and l_val <= 0.0:
+                # Strict validation: Face-to-face length L is mandatory for all valves
+                if l_val <= 0.0:
+                    continue
+
+                # Flanged valves require a valid flange OD (D > 0)
+                is_flanged = "F2" in fig_model or "BRIDADA" in valve_type.upper()
+                if is_flanged and d_val <= 0.0:
                     continue
 
                 entry = DimensionEntry(

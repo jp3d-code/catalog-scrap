@@ -41,6 +41,8 @@ class DatasheetPlant3DTransformer:
 
         for dim in item.dimensions:
             nps = dim.nps
+            if not nps or dim.dn <= 0 or dim.dec_in <= 0.0 or dim.dec_in > 48.0:
+                continue
             part_tag = nps.replace(' ', '').replace('"', 'IN').replace('/', '-')
 
             # Dual-class expansion (e.g. 150 lbs and 300 lbs in same row)
@@ -157,6 +159,11 @@ class CatalogPlant3DTransformer:
 
         for dim in item.dimensions:
             nps = dim.nps
+            if not nps or dim.dn <= 0 or dim.dec_in <= 0.0 or dim.dec_in > 48.0:
+                continue
+            l_eff = dim.l_150 if dim.l_150 > 0 else dim.l_300
+            if l_eff <= 0.0:
+                continue
             part_tag = nps.replace(' ', '').replace('"', 'IN').replace('/', '-')
 
             # Dual-class expansion (strictly L and D)
