@@ -165,6 +165,9 @@ class KlingerK200Parser(BaseParser):
                 torque_300=torque_300,
                 weight_150=weight_150,
                 weight_300=weight_300,
+                page_number=1,
+                row_index=(token_idx - start_idx) // 13 + 1,
+                source="klinger_k200",
                 extra_dimensions={
                     "H_mm": h_val,
                     "L1_mm": l1_val,

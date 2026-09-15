@@ -1,12 +1,26 @@
 import argparse
+import json
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Any, List, Optional
 
 from catalog_scrap.core import CatalogParserFactory
 from catalog_scrap.loaders import PdfLoader
 from catalog_scrap.transformers import DatasheetPlant3DTransformer, CatalogPlant3DTransformer
 from catalog_scrap.exporters import DatasheetJSONExporter, CatalogJSONExporter, CSVExporter
+
+
+def _save_quality_report(parser: Any, out_dir: Path, stem: str) -> None:
+    """Persiste el reporte de calidad por tabla (filas leidas/descartes)."""
+    qualities = getattr(parser, "last_quality", None)
+    if not qualities:
+        return
+    report = [q.to_dict() for q in qualities]
+    discarded = sum(len(q.discarded) for q in qualities)
+    dest = out_dir / f"{stem}_quality.json"
+    with open(dest, mode="w", encoding="utf-8") as f:
+        json.dump(report, f, indent=2, ensure_ascii=False)
+    print(f"[Quality] {discarded} filas descartadas con motivo -> {dest}")
 
 
 def resolve_pdf_path(pdf_str: str) -> Optional[Path]:
@@ -48,6 +62,8 @@ def run_spec_pipeline(pdf_path: Path, output_dir: Path, adapter_name: Optional[s
     with loader.load(resolved_pdf) as pdf_handle:
         parser = CatalogParserFactory.get_parser(resolved_pdf, adapter_name)
         items = parser.parse(pdf_handle)
+        for it in items:
+            it.metadata["source_pdf"] = resolved_pdf.name
 
     if not items:
         print(f"[Datasheet Engine] No components parsed from: {resolved_pdf}")
@@ -68,6 +84,7 @@ def run_spec_pipeline(pdf_path: Path, output_dir: Path, adapter_name: Optional[s
     dest_file = out_dir / f"{clean_model_name}.json"
     exporter = DatasheetJSONExporter()
     exporter.export(item, plant3d_records, dest_file)
+    _save_quality_report(parser, out_dir, clean_model_name)
 
     print(f"[OK] Successfully generated single specification file: {dest_file}")
 
@@ -100,6 +117,8 @@ def run_catalog_pipeline(
     with loader.load(resolved_pdf) as pdf_handle:
         parser = CatalogParserFactory.get_parser(resolved_pdf, adapter_name)
         items = parser.parse(pdf_handle)
+        for it in items:
+            it.metadata["source_pdf"] = resolved_pdf.name
 
     if not items:
         print(f"[Catalog Engine] No catalog items parsed from: {resolved_pdf}")
@@ -133,6 +152,8 @@ def run_catalog_pipeline(
         csv_path = out_dir / f"{stem_name}_plant3d.csv"
         csv_exporter = CSVExporter()
         csv_exporter.export(all_records, csv_path)
+
+    _save_quality_report(parser, out_dir, stem_name)
 
     print(f"[OK] Successfully generated catalog structure under: {out_dir / stem_name}")
 

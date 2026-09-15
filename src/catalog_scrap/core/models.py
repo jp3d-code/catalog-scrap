@@ -36,6 +36,10 @@ class DimensionEntry:
     weight_150: float = 0.0
     weight_300: float = 0.0
     extra_dimensions: Dict[str, Any] = field(default_factory=dict)
+    # Trazabilidad: de que pagina/fila del PDF salio esta cota
+    page_number: int = 0
+    row_index: int = 0
+    source: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize dimension entry to clean dictionary."""
@@ -55,6 +59,9 @@ class DimensionEntry:
             "torque_300": self.torque_300,
             "weight_150": self.weight_150,
             "weight_300": self.weight_300,
+            "page_number": self.page_number,
+            "row_index": self.row_index,
+            "source": self.source,
         }
         if self.extra_dimensions:
             data["extra_parameters"] = self.extra_dimensions

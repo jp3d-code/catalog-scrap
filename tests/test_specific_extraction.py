@@ -76,11 +76,27 @@ class TestSpecificExtraction(unittest.TestCase):
         rec_150 = next(r for r in records if r["Part_Number"] == "INTEC-K200-1-2IN-150LBS")
         rec_300 = next(r for r in records if r["Part_Number"] == "INTEC-K200-1-2IN-300LBS")
         self.assertEqual(rec_150["L_mm"], 108.0)
-        self.assertEqual(rec_150["D_mm"], 89.0)
+        self.assertEqual(rec_150["D_flange_mm"], 89.0)
+        self.assertEqual(rec_150["D_bore_mm"], 0.0)
         self.assertEqual(rec_150["Torque_Nm"], 9.0)
         self.assertEqual(rec_300["L_mm"], 140.0)
-        self.assertEqual(rec_300["D_mm"], 95.0)
+        self.assertEqual(rec_300["D_flange_mm"], 95.0)
         self.assertEqual(rec_300["Torque_Nm"], 10.0)
+
+    def test_k200_uses_high_fidelity_template(self):
+        transformer = Plant3DTransformer()
+        records = transformer.transform([self.item])
+        templates = {r["Geometry_Template"] for r in records}
+        self.assertEqual(templates, {"INTEC_K200_BALL_VALVE"})
+
+    def test_records_carry_provenance(self):
+        transformer = Plant3DTransformer()
+        records = transformer.transform([self.item])
+        for r in records:
+            self.assertIn("Source_PDF", r)
+            self.assertIn("Page_Number", r)
+            self.assertIn("Row_Index", r)
+            self.assertGreater(r["Row_Index"], 0)
 
 
 if __name__ == "__main__":

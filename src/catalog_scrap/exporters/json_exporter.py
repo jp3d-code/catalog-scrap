@@ -66,6 +66,7 @@ class CatalogJSONExporter(BaseExporter):
         # 2. Master Consolidated JSON File
         if mode in ("consolidated", "both"):
             payload = {
+                "extraction_type": "generic",
                 "metadata": meta,
                 "items": records
             }
@@ -87,6 +88,7 @@ class CatalogJSONExporter(BaseExporter):
 
                 geom_template = first_rec.get("Geometry_Template", "BALL_VALVE_2PC_FLANGED")
                 op_type = first_rec.get("Operator_Type", "LEVER")
+                pages = sorted({r.get("Page_Number", 0) for r in model_records if r.get("Page_Number")})
 
                 models_index.append({
                     "model": model_name,
@@ -95,6 +97,7 @@ class CatalogJSONExporter(BaseExporter):
                     "geometry_template": geom_template,
                     "operator_type": op_type,
                     "records_count": len(model_records),
+                    "pages": pages,
                     "file": model_filename
                 })
 
@@ -106,6 +109,7 @@ class CatalogJSONExporter(BaseExporter):
                     "geometry_template": geom_template,
                     "operator_type": op_type,
                     "records_count": len(model_records),
+                    "pages": pages,
                     "standards": {
                         "face_to_face": first_rec.get("Standard_Face_To_Face", ""),
                         "flanges": first_rec.get("Standard_Flange", "")
@@ -118,6 +122,7 @@ class CatalogJSONExporter(BaseExporter):
             # Generate manifest.json for catalog index
             manifest_payload = {
                 "source_catalog": meta.get("source_catalog", destination.name),
+                "extraction_type": "generic",
                 "generated_at": datetime.now().isoformat(),
                 "total_models": len(grouped_by_model),
                 "total_records": len(records),
