@@ -5,6 +5,53 @@ from typing import List, Dict, Any, Optional
 from catalog_scrap.core.base_parser import BaseParser
 from catalog_scrap.core.models import CatalogItem, DimensionEntry
 from catalog_scrap.parsers.utils import parse_nps_cell
+from catalog_scrap.parsers.table import (
+    TableQuality,
+    bare_remainder,
+    classify_columns,
+    clean_row,
+    extract_size_candidate,
+    first_bare_dn,
+    first_float,
+    first_token,
+    iso_token,
+    last_float,
+    parse_bare_dn,
+    parse_length_cell,
+    repair_fractures,
+    size_remainder,
+    strip_product_code,
+)
+
+# La columna 'D' del PDF es bore/paso y 'D1' es diametro de brida en las
+# tablas de valvulas bridadas multiculumna (pags. 2, 4, 25, 30, 34, 35).
+# En tablas roscadas simples 'd1' es el bore ('2006SC', pag. 11).
+# El prefijo opcional \d{4,} absorbe restos de codigo ('0039 10” 405' -> 405).
+_SIZE_PREFIX_RE = re.compile(
+    r'^\s*(?:\d{4,}\s+)?\d+(?:\s+\d+/\d+|\.\d+/\d+|/\d+)?\s*["\u201c\u201d]\s*'
+)
+
+
+def _fused_weight(weight_cell: str, next_cell: str) -> float:
+    """Peso desde celda fusionada Peso+ISO+Par ('F25 510 248' -> 248.0).
+
+    El peso es el ultimo token, salvo huerfano de un digito de la columna
+    siguiente ('F25 510 248 2' + '2.5 ...' -> 248.0): si el ultimo token es
+    un solo digito que continua en la celda vecina, se toma el anterior.
+    """
+    toks = (weight_cell or '').split()
+    if not toks:
+        return 0.0
+    if len(toks) >= 2 and len(toks[-1]) == 1 and toks[-1].isdigit():
+        nxt = (next_cell or '').split()
+        if nxt and nxt[0] != toks[-1] and nxt[0].startswith(toks[-1]):
+            toks = toks[:-1]
+            if not toks:
+                return 0.0
+    try:
+        return float(toks[-1].replace(',', '.'))
+    except ValueError:
+        return 0.0
 
 
 class SaidiRK2016Parser(BaseParser):
@@ -20,6 +67,7 @@ class SaidiRK2016Parser(BaseParser):
     def parse(self, pdf_handle) -> List[CatalogItem]:
         """Parse all pages from Saidi RK 2016 Ball Valves PDF Catalog into a list of CatalogItem entities."""
         items: List[CatalogItem] = []
+        self.last_quality: List[TableQuality] = []
 
         for page_idx, page in enumerate(pdf_handle.pages):
             text = page.extract_text() or ""
@@ -39,7 +87,10 @@ class SaidiRK2016Parser(BaseParser):
 
             tables = page.extract_tables()
             materials = self._extract_materials(tables)
-            dimensions = self._extract_dimensions(tables, fig_model=fig_model, valve_type=valve_type)
+            dimensions = self._extract_dimensions(
+                tables, fig_model=fig_model, valve_type=valve_type,
+                page_number=page_idx + 1,
+            )
 
             if dimensions:
                 catalog_item = CatalogItem(
@@ -86,10 +137,19 @@ class SaidiRK2016Parser(BaseParser):
         return ""
 
     def _extract_class(self, lines: List[str]) -> str:
+        # Orden estricto: LBS/# primero, luego WOG, luego PN aislado.
+        # Sin esto, 'DIN 2543 PN16' se capturaba como '2543 PN16'.
         for line in lines:
-            match = re.search(r'(\d+)\s*(LBS|lbs|PN\s*\d+|WOG)', line)
+            match = re.search(r'(150|300|600|800|1500|2500)\s*(LBS|lbs|#)', line)
             if match:
-                return match.group(0).strip().upper()
+                return f"{match.group(1)}LBS"
+            match = re.search(r'(\d+)\s*WOG', line, re.IGNORECASE)
+            if match:
+                return f"{match.group(1)}WOG"
+        for line in lines:
+            match = re.search(r'\bPN\s*(\d+)', line, re.IGNORECASE)
+            if match:
+                return f"PN{match.group(1)}"
         return "150LBS"
 
     def _extract_material_heading(self, lines: List[str]) -> str:
@@ -130,129 +190,183 @@ class SaidiRK2016Parser(BaseParser):
                         materials[clean_row[1]] = clean_row[2]
         return materials
 
-    def _extract_dimensions(self, tables: List[List[List[str]]], fig_model: str = "", valve_type: str = "") -> List[DimensionEntry]:
+    def _strip_size_prefix(self, cell: str) -> str:
+        """Quita el fragmento de talla fusionado ('1” 110 79.4' -> '110 79.4').
+
+        pdfplumber fusiona DN+D1+D2 en una celda cuando la talla no se
+        fractura; sin esto first_float devolveria la talla (1.0) como D1.
+        """
+        return _SIZE_PREFIX_RE.sub('', cell or '').strip()
+
+    def _extract_dimensions(self, tables: List[List[List[str]]], fig_model: str = "", valve_type: str = "", page_number: int = 0) -> List[DimensionEntry]:
         dimensions = []
+        if not hasattr(self, "last_quality"):
+            self.last_quality: List[TableQuality] = []
 
         for table in tables:
             if not table or len(table) < 2:
                 continue
 
             # Identify header row
-            header_row = [(" ".join(c.replace('\n', ' ').split()).upper() if c else "") for c in table[0]]
-            header_str = " ".join(header_row)
+            header = clean_row(table[0])
+            header_str = " ".join(header).upper()
 
             if not any(k in header_str for k in ["DN", "NPS", "NPT", "D1", "CÓDIGO", "CODIGO"]):
                 continue
 
-            # Map column names to indexes
-            col_map = {}
-            for idx, h in enumerate(header_row):
-                if not h:
-                    continue
-                if h in ["DN", "NPS", "NPT"] or h.startswith("DN ") or h.startswith("NPS "):
-                    col_map["size"] = idx
-                elif "D1" in h or h == "D" or "DIÁMETRO" in h:
-                    col_map["d"] = idx
-                elif "L P H" in h or "L H" in h:
-                    col_map["l_p_h"] = idx
-                elif "L" == h:
-                    col_map["l"] = idx
-                elif "H" == h or "H1" in h:
-                    col_map["h"] = idx
-                elif h == "P" or "PALANCA" in h or "L1" in h:
-                    col_map["l1"] = idx
-                elif "PESO" in h or "WEIGHT" in h or "KG" in h:
-                    col_map["weight"] = idx
-                elif "ISO" in h:
-                    col_map["iso"] = idx
+            cmap = classify_columns(header)
+            quality = TableQuality(page_number=page_number, model=fig_model)
+            self.last_quality.append(quality)
 
-            for row in table[1:]:
-                clean_row = [(" ".join(c.replace('\n', ' ').split()).strip() if c else "") for c in row]
-                if not any(clean_row):
+            # Sin columna de longitud no puede haber cotas L-mandatorias:
+            # tabla no dimensional (pares, BOM) -> skip limpio con traza.
+            if "length" not in cmap and "length_grouped" not in cmap:
+                quality.status = "skipped_no_length"
+                quality.rows_in = len(table) - 1
+                continue
+
+            size_idx = cmap.get("size")
+            code_idx = cmap.get("code")
+            flange_idx = cmap.get("d1")
+            bore_idx = cmap.get("d")
+            length_idx = cmap.get("length")
+            grouped_idx = cmap.get("length_grouped")
+            height_idx = cmap.get("height")
+            weight_idx = cmap.get("weight")
+            iso_idx = cmap.get("iso")
+            # Legacy: columna 'P' (palanca) como aproximacion de L1
+            lever_idx = next(
+                (i for i, h in enumerate(header)
+                 if h.strip().upper() in ("P",) or "PALANCA" in h.upper() or "L1" in h.upper()),
+                None,
+            )
+
+            for row_nr, raw in enumerate(table[1:], start=2):
+                cells = repair_fractures(clean_row(raw))
+                quality.rows_in += 1
+                if not any(cells):
+                    quality.discard(row_nr, "empty_row")
                     continue
 
-                full_text = " ".join(clean_row)
+                full_text = " ".join(cells)
                 if any(note in full_text.lower() for note in ["certificado", "correspondientes", "marca", "prueba", "norma"]):
+                    quality.discard(row_nr, "note_row", full_text)
                     continue
 
-                # Remove product codes (10-15 digit numbers) from clean_row before size parsing
-                clean_row_no_codes = [re.sub(r'^\d{8,15}\s*', '', cell) for cell in clean_row]
+                no_codes = [strip_product_code(c) for c in cells]
 
-                # 1. Size extraction
-                raw_nps = ""
-                if "size" in col_map and col_map["size"] < len(clean_row_no_codes):
-                    raw_nps = clean_row_no_codes[col_map["size"]]
+                # 1. Size extraction: primer candidato que parsea valido.
+                # Orden: columna size -> celdas 0..2 (zona codigo/talla) ->
+                # fallback sobre la fila. Una celda de codigo puro no es
+                # talla: se salta al siguiente candidato.
+                ordered_cells = []
+                if size_idx is not None and size_idx < len(no_codes):
+                    ordered_cells.append((size_idx, no_codes[size_idx]))
+                for ci in (code_idx, 0, 1, 2):
+                    if ci is not None and ci < len(no_codes) and no_codes[ci] not in [t for _, t in ordered_cells]:
+                        ordered_cells.append((ci, no_codes[ci]))
+                ordered_cells.append((None, extract_size_candidate(no_codes)))
+
+                raw_nps, nps_info = "", {"nps": "", "dn": 0, "dec_in": 0.0}
+                size_cell_idx, size_cell_used, bare_dn_used = None, "", False
+                for ci, cand in ordered_cells:
+                    if not cand or any(k in cand for k in ["97/23", "0035", "0039", "CE", "PED"]):
+                        continue
+                    # Entero desnudo = dialecto DN-mm ('65' -> DN65, jamas
+                    # pulgadas: parse_nps_cell lo leeria como 65").
+                    if re.fullmatch(r'\s*\d{1,3}\s*', cand):
+                        info = parse_bare_dn(cand) or {"nps": "", "dn": 0, "dec_in": 0.0}
+                        bare = True
+                    else:
+                        info = parse_nps_cell(cand)
+                        bare = False
+                        if not (info["nps"] and info["dn"] > 0 and 0.0 < info["dec_in"] <= 24.0):
+                            info = first_bare_dn(cand) or {"nps": "", "dn": 0, "dec_in": 0.0}
+                            bare = info["nps"] != ""
+                    if info["nps"] and info["dn"] > 0 and 0.0 < info["dec_in"] <= 24.0:
+                        raw_nps, nps_info = cand, info
+                        size_cell_idx, size_cell_used, bare_dn_used = ci, cand, bare
+                        break
                 if not raw_nps:
-                    match = re.search(r'(\d+\s*/\s*\d+\s*[\"\u201c\u201d\u00bd\u00be\u00bc]?|\d+(?:\.\d+)?\s*[\"\u201c\u201d\u00bd\u00be\u00bc]|\bDN\s*\d+|\b\d+\s*mm\b)', " ".join(clean_row_no_codes), re.IGNORECASE)
-                    if match:
-                        raw_nps = match.group(1)
-
-                if not raw_nps or any(k in raw_nps for k in ["97/23", "0035", "0039", "CE", "PED"]):
+                    quality.discard(row_nr, "invalid_nps", full_text)
                     continue
+                dn_mm = nps_info["dn"]
 
-                nps_info = parse_nps_cell(raw_nps)
-                dn_mm = nps_info['dn']
-                if not nps_info['nps'] or dn_mm <= 0 or nps_info['dec_in'] <= 0.0 or nps_info['dec_in'] > 24.0:
-                    continue
+                l_val = 0.0
+                if grouped_idx is not None and grouped_idx < len(cells):
+                    l_val = parse_length_cell(cells[grouped_idx], grouped=True)
+                elif length_idx is not None and length_idx < len(cells):
+                    l_val = parse_length_cell(cells[length_idx], dn_mm=dn_mm)
+                d_flange = first_float(self._strip_size_prefix(cells[flange_idx])) if flange_idx is not None and flange_idx < len(cells) else 0.0
+                d_bore = first_float(cells[bore_idx]) if bore_idx is not None and bore_idx < len(cells) else 0.0
+                # Tablas roscadas simples: 'd1' ES el bore (no hay brida)
+                if d_bore <= 0.0 and flange_idx is not None and "BRIDADA" not in valve_type.upper() and "F2" not in fig_model:
+                    d_bore = d_flange
+                    d_flange = 0.0
+                # Sin columna D ('DN D' fusionados, pag. 35): el bore es el
+                # resto numerico de la celda de talla ('1/2” 14' -> 14).
+                if d_bore <= 0.0 and size_idx is not None and size_idx < len(no_codes):
+                    d_bore = first_float(size_remainder(no_codes[size_idx]))
 
-                l_val, d_val, h_val, l1_val, weight_val = 0.0, 0.0, 0.0, 0.0, 0.0
-                iso_flange = ""
-
-                # Handle grouped "L P H" column if present (e.g. "356 77 15" or "76 85")
-                if "l_p_h" in col_map and col_map["l_p_h"] < len(clean_row_no_codes):
-                    parts = clean_row_no_codes[col_map["l_p_h"]].split()
-                    if len(parts) >= 1:
+                # D1 fracturado en dos celdas ('65 18' + '5 145' -> 185,
+                # pag. 19): solo en dialecto DN desnudo sin columna size,
+                # tomando el D1 de la celda SIGUIENTE a la de la talla, con
+                # fragmentos cortos y resultado fisicamente coherente.
+                next_idx = size_cell_idx + 1 if size_cell_idx is not None else None
+                if (bare_dn_used and size_idx is None and next_idx is not None
+                        and next_idx < len(cells) and d_bore > 0.0):
+                    frag_r = bare_remainder(size_cell_used)
+                    frag_f = first_token(cells[next_idx])
+                    if (re.fullmatch(r'\d{1,2}', frag_r or '')
+                            and re.fullmatch(r'\d{1,2}', frag_f or '')):
                         try:
-                            l_val = float(parts[0])
+                            joined = float(f"{frag_r}{frag_f}")
                         except ValueError:
-                            pass
+                            joined = 0.0
+                        if joined > d_bore * 1.2:
+                            d_flange = joined
+                h_val = first_float(cells[height_idx]) if height_idx is not None and height_idx < len(cells) else 0.0
+                if h_val <= 0.0 and grouped_idx is not None and grouped_idx < len(cells):
+                    # 'L P H' agrupado: el segundo token es H (paridad legacy)
+                    parts = cells[grouped_idx].split()
                     if len(parts) >= 2:
                         try:
-                            h_val = float(parts[1])
+                            h_val = float(parts[1].replace(',', '.'))
                         except ValueError:
                             pass
-
-                if "l" in col_map and col_map["l"] < len(clean_row_no_codes) and l_val == 0.0:
-                    try:
-                        l_val = float(clean_row_no_codes[col_map["l"]])
-                    except ValueError:
-                        pass
-
-                if "d" in col_map and col_map["d"] < len(clean_row_no_codes):
-                    try:
-                        d_val = float(clean_row_no_codes[col_map["d"]])
-                    except ValueError:
-                        pass
-
-                if "h" in col_map and col_map["h"] < len(clean_row_no_codes) and h_val == 0.0:
-                    try:
-                        h_val = float(clean_row_no_codes[col_map["h"]])
-                    except ValueError:
-                        pass
-
-                if "l1" in col_map and col_map["l1"] < len(clean_row_no_codes):
-                    try:
-                        l1_val = float(clean_row_no_codes[col_map["l1"]])
-                    except ValueError:
-                        pass
-
-                if "weight" in col_map and col_map["weight"] < len(clean_row_no_codes):
-                    try:
-                        weight_val = float(clean_row_no_codes[col_map["weight"]])
-                    except ValueError:
-                        pass
-
-                if "iso" in col_map and col_map["iso"] < len(clean_row_no_codes):
-                    iso_flange = clean_row_no_codes[col_map["iso"]].upper()
+                l1_val = first_float(cells[lever_idx]) if lever_idx is not None and lever_idx < len(cells) else 0.0
+                weight_val = first_float(cells[weight_idx]) if weight_idx is not None and weight_idx < len(cells) else 0.0
+                iso_flange = (cells[iso_idx] or "").upper() if iso_idx is not None and iso_idx < len(cells) else ""
+                if weight_idx is not None and weight_idx < len(cells):
+                    # Cabecera fusionada Peso+ISO+Par ('F25 510 248'):
+                    # el peso es el ULTIMO token y el ISO el codigo Fxx.
+                    weight_header = header[weight_idx].upper() if weight_idx < len(header) else ""
+                    if "ISO" in weight_header and "PAR" in weight_header:
+                        weight_cell = cells[weight_idx]
+                        next_cell = cells[weight_idx + 1] if weight_idx + 1 < len(cells) else ""
+                        weight_val = _fused_weight(weight_cell, next_cell)
+                        if not iso_flange:
+                            iso_flange = iso_token(weight_cell)
 
                 # Strict validation: Face-to-face length L is mandatory for all valves
                 if l_val <= 0.0:
+                    quality.discard(row_nr, "missing_L", full_text)
                     continue
 
-                # Flanged valves require a valid flange OD (D > 0)
+                # Flanged valves require a valid flange OD (D1 > 0 or D > 0)
                 is_flanged = "F2" in fig_model or "BRIDADA" in valve_type.upper()
-                if is_flanged and d_val <= 0.0:
+                if is_flanged and d_flange <= 0.0 and d_bore <= 0.0:
+                    quality.discard(row_nr, "flanged_without_D", full_text)
                     continue
+
+                # Invariante fisico: el OD de brida siempre supera al bore
+                # con margen (corona + taladros). Filtra D1 fracturados.
+                if is_flanged and d_bore > 0.0 and d_flange <= d_bore * 1.2:
+                    quality.discard(row_nr, "flange_le_bore", full_text)
+                    continue
+
+                # D canonico: brida en bridadas, bore en roscadas
+                d_val = d_flange if (is_flanged and d_flange > 0.0) else d_bore
 
                 entry = DimensionEntry(
                     nps=nps_info['nps'],
@@ -269,8 +383,16 @@ class SaidiRK2016Parser(BaseParser):
                     torque_150=0.0,
                     torque_300=0.0,
                     weight_150=weight_val,
-                    weight_300=weight_val
+                    weight_300=weight_val,
+                    extra_dimensions={
+                        "d_flange_mm": d_flange,
+                        "d_bore_mm": d_bore,
+                    },
+                    page_number=page_number,
+                    row_index=row_nr,
+                    source="saidi_rk2016",
                 )
                 dimensions.append(entry)
+                quality.records_out += 1
 
         return dimensions
