@@ -60,9 +60,10 @@ uv run python -m catalog_scrap.cli catalog docs/catalogs/CATALOGO_VAL_BOLA_2016-
 ```
 
 ### 3. Procesar Todo el Repositorio (`run-all`)
-```powershell
-uv run python -m catalog_scrap.cli run-all --output-dir output
+```bash
+uv run python -m catalog_scrap.cli --output-dir output run-all
 ```
+> `--output-dir` es un flag global: va ANTES del subcomando.
 
 ---
 
